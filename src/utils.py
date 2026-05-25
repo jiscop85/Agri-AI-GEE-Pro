@@ -17,3 +17,80 @@ from config import RANDOM_SEED, BUFFER_M, PATCH_SIZE, STRIDE, MIN_POSITIVE_RATIO
 
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
+
+def read_boundary(boundary_path: Path, fallback_aoi=None):
+    """
+    Read a local vector boundary file and return:
+    - GeoDataFrame in EPSG:4326
+    - dissolved geometry in EPSG:4326
+    """
+    if boundary_path.exists():
+        gdf = gpd.read_file(boundary_path)
+        if gdf.empty:
+            raise ValueError(f"Boundary file is empty: {boundary_path}")
+        if gdf.crs is None:
+            # default assumption if source lacks CRS
+            gdf = gdf.set_crs("EPSG:4326")
+        gdf = gdf.to_crs("EPSG:4326")
+        geom = unary_union(gdf.geometry)
+        return gdf, geom
+
+    if fallback_aoi is not None:
+        geom = box(*fallback_aoi)
+        gdf = gpd.GeoDataFrame({"id": [1]}, geometry=[geom], crs="EPSG:4326")
+        return gdf, geom
+
+    raise FileNotFoundError(
+        f"Boundary file not found: {boundary_path}. "
+        "Place a .geojson/.gpkg/.shp there or enable AOI fallback."
+    )
+
+def buffered_geometry(geom, buffer_m=BUFFER_M):
+    """
+    Buffer the geometry in meters using EPSG:3857, then convert back to EPSG:4326.
+    """
+    gdf = gpd.GeoDataFrame(geometry=[geom], crs="EPSG:4326")
+    gdf_3857 = gdf.to_crs("EPSG:3857")
+    gdf_3857["geometry"] = gdf_3857.buffer(buffer_m)
+    return gdf_3857.to_crs("EPSG:4326").geometry.iloc[0]
+
+def save_rasterized_mask(vector_geom, reference_tif, out_mask_tif, burn_value=1):
+    """
+    Rasterize a polygon/multipolygon to the exact grid of the reference raster.
+    """
+    with rasterio.open(reference_tif) as src:
+        profile = src.profile.copy()
+        transform = src.transform
+        shape = (src.height, src.width)
+        crs = src.crs
+
+    gdf = gpd.GeoDataFrame(geometry=[vector_geom], crs="EPSG:4326").to_crs(crs)
+    mask = rasterize(
+        [(mapping(gdf.geometry.iloc[0]), burn_value)],
+        out_shape=shape,
+        transform=transform,
+        fill=0,
+        dtype=np.uint8
+    )
+
+    profile.update(count=1, dtype=rasterio.uint8, compress="deflate")
+    with rasterio.open(out_mask_tif, "w", **profile) as dst:
+        dst.write(mask, 1)
+
+    return out_mask_tif
+
+def normalize_stack(stack, n_seasons, bands_per_season):
+    """
+    Reflectance bands scale to [0,1] approximately.
+    Vegetation indices scale from [-1, 1] to [0, 1].
+    """
+    x = stack.astype(np.float32).copy()
+    for s in range(n_seasons):
+        start = s * bands_per_season
+        # Reflectance bands (first 8 bands except indices)
+        reflect = slice(start, start + 8)
+        idx = slice(start + 8, start + bands_per_season)
+        x[reflect] = np.clip(x[reflect] / 10000.0, 0.0, 1.0)
+        x[idx] = np.clip((x[idx] + 1.0) / 2.0, 0.0, 1.0)
+    return x
+
