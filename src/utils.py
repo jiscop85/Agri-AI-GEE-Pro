@@ -144,3 +144,37 @@ def dice_coef_np(y_true, y_pred, smooth=1e-6):
     inter = np.sum(y_true_f * y_pred_f)
     return (2.0 * inter + smooth) / (np.sum(y_true_f) + np.sum(y_pred_f) + smooth)
 
+def iou_np(y_true, y_pred, smooth=1e-6):
+    y_true_f = y_true.reshape(-1).astype(np.bool_)
+    y_pred_f = y_pred.reshape(-1).astype(np.bool_)
+    inter = np.logical_and(y_true_f, y_pred_f).sum()
+    union = np.logical_or(y_true_f, y_pred_f).sum()
+    return (inter + smooth) / (union + smooth)
+
+def boundary_f1_score(y_true, y_pred, dilation=2):
+    """
+    Boundary F1 using skimage boundaries and a small dilation.
+    """
+    true_b = measure.find_contours(y_true.astype(np.uint8), 0.5)
+    pred_b = measure.find_contours(y_pred.astype(np.uint8), 0.5)
+    # Fallback: approximate with morphological boundaries if contours absent
+    true_edge = morphology.binary_dilation(y_true, morphology.disk(1)) ^ morphology.binary_erosion(y_true, morphology.disk(1))
+    pred_edge = morphology.binary_dilation(y_pred, morphology.disk(1)) ^ morphology.binary_erosion(y_pred, morphology.disk(1))
+
+    if true_edge.sum() == 0 and pred_edge.sum() == 0:
+        return 1.0
+
+    tp = np.logical_and(true_edge, pred_edge).sum()
+    p = pred_edge.sum()
+    r = true_edge.sum()
+
+    precision = tp / (p + 1e-6)
+    recall = tp / (r + 1e-6)
+    if precision + recall == 0:
+        return 0.0
+    return 2 * precision * recall / (precision + recall)
+
+def remove_small_components(mask, min_size=64):
+    lbl = measure.label(mask > 0, connectivity=2)
+    cleaned = morphology.remove_small_objects(lbl, min_size=min_size) > 0
+    return cleaned.astype(np.uint8)
