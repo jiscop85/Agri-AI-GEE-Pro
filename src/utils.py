@@ -94,3 +94,53 @@ def normalize_stack(stack, n_seasons, bands_per_season):
         x[idx] = np.clip((x[idx] + 1.0) / 2.0, 0.0, 1.0)
     return x
 
+def patch_grid(h, w, patch_size=PATCH_SIZE, stride=STRIDE):
+    for row in range(0, h - patch_size + 1, stride):
+        for col in range(0, w - patch_size + 1, stride):
+            yield row, col
+
+def extract_patches(image, mask, patch_size=PATCH_SIZE, stride=STRIDE):
+    """
+    Balanced patch extraction for segmentation.
+    image: (bands, H, W)
+    mask:  (H, W)
+    Returns X, y, meta
+    """
+    X, y, meta = [], [], []
+    bands, h, w = image.shape
+
+    for row, col in patch_grid(h, w, patch_size, stride):
+        img_patch = image[:, row:row+patch_size, col:col+patch_size]
+        mask_patch = mask[row:row+patch_size, col:col+patch_size]
+
+        if img_patch.shape[1] != patch_size or img_patch.shape[2] != patch_size:
+            continue
+
+        # Empty-ness check on first eight bands.
+        valid_ratio = np.mean(img_patch[:8] > 0)
+        if valid_ratio < 0.10:
+            continue
+
+        positive_ratio = mask_patch.mean()
+
+        # keep patches containing target
+        if positive_ratio >= MIN_POSITIVE_RATIO:
+            keep = True
+        else:
+            keep = (np.random.rand() < KEEP_NEGATIVE_PROB)
+
+        if not keep:
+            continue
+
+        X.append(np.transpose(img_patch, (1, 2, 0)).astype(np.float32))
+        y.append(mask_patch[..., np.newaxis].astype(np.uint8))
+        meta.append({"row": row, "col": col, "positive_ratio": float(positive_ratio)})
+
+    return np.array(X), np.array(y), meta
+
+def dice_coef_np(y_true, y_pred, smooth=1e-6):
+    y_true_f = y_true.reshape(-1).astype(np.float32)
+    y_pred_f = y_pred.reshape(-1).astype(np.float32)
+    inter = np.sum(y_true_f * y_pred_f)
+    return (2.0 * inter + smooth) / (np.sum(y_true_f) + np.sum(y_pred_f) + smooth)
+
