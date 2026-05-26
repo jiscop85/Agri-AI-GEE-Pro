@@ -44,4 +44,33 @@ def main():
 
     if len(X) == 0:
         raise RuntimeError("No patches were created. Try a larger buffer or different stride.")
+    # Shuffle deterministically
+    idx = np.arange(len(X))
+    rng = np.random.default_rng(RANDOM_SEED)
+    rng.shuffle(idx)
+    X, y = X[idx], y[idx]
+    meta = [meta[i] for i in idx]
+
+    n = len(X)
+    n_train = int(0.8 * n)
+    n_val = int(0.1 * n)
+
+    X_train, y_train = X[:n_train], y[:n_train]
+    X_val, y_val = X[n_train:n_train+n_val], y[n_train:n_train+n_val]
+    X_test, y_test = X[n_train+n_val:], y[n_train+n_val:]
+
+    DATASET_DIR.mkdir(exist_ok=True, parents=True)
+    np.savez_compressed(DATASET_DIR / "train.npz", X=X_train, y=y_train)
+    np.savez_compressed(DATASET_DIR / "val.npz", X=X_val, y=y_val)
+    np.savez_compressed(DATASET_DIR / "test.npz", X=X_test, y=y_test)
+
+    pd.DataFrame(meta).to_csv(DATASET_DIR / "patch_meta.csv", index=False)
+
+    print(f"Saved dataset to {DATASET_DIR}")
+    print("Train:", X_train.shape, y_train.shape)
+    print("Val:  ", X_val.shape, y_val.shape)
+    print("Test: ", X_test.shape, y_test.shape)
+
+if __name__ == "__main__":
+    main()
 
