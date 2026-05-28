@@ -80,4 +80,57 @@ def main():
 
     Path(LOGS_DIR).mkdir(parents=True, exist_ok=True)
     Path("outputs").mkdir(exist_ok=True, parents=True)
+    callbacks = [
+        tf.keras.callbacks.ModelCheckpoint(
+            MODEL_OUT,
+            monitor="val_dice_coef",
+            mode="max",
+            save_best_only=True,
+            verbose=1,
+        ),
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_dice_coef",
+            mode="max",
+            patience=10,
+            restore_best_weights=True,
+            verbose=1,
+        ),
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor="val_dice_coef",
+            mode="max",
+            patience=5,
+            factor=0.5,
+            verbose=1,
+        ),
+        tf.keras.callbacks.TensorBoard(log_dir=LOGS_DIR),
+    ]
+
+    train_ds = make_dataset(X_train, y_train, training=True)
+    val_ds = make_dataset(X_val, y_val, training=False)
+
+    history = model.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=EPOCHS,
+        callbacks=callbacks,
+    )
+
+    model.save(MODEL_OUT)
+    print(f"Saved model to {MODEL_OUT}")
+
+    # save training curves
+    hist_path = Path("outputs/history.json")
+    with hist_path.open("w", encoding="utf-8") as f:
+        json.dump(history.history, f, indent=2)
+
+    plt.figure(figsize=(10, 4))
+    plt.plot(history.history["dice_coef"], label="train_dice")
+    plt.plot(history.history["val_dice_coef"], label="val_dice")
+    plt.legend()
+    plt.title("Dice score")
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    main()
 
