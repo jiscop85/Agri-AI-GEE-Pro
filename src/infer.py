@@ -58,3 +58,44 @@ def polygonize_mask(mask, transform, crs):
     gdf["area_px_geom"] = gdf.geometry.area
     return gdf
 
+def main():
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError("Missing model. Run src/train.py first.")
+    if not STACK_TIF.exists():
+        raise FileNotFoundError("Missing exported stack. Run src/gee_export.py and download the TIF first.")
+
+    model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+
+    with rasterio.open(STACK_TIF) as src:
+        stack = src.read()
+        profile = src.profile.copy()
+        transform = src.transform
+        crs = src.crs
+
+    bands_per_season = stack.shape[0] // N_SEASONS
+    stack = normalize_stack(stack, n_seasons=N_SEASONS, bands_per_season=bands_per_season)
+
+    prob, mask = predict_overlap(model, stack)
+
+    # Clean tiny components and speckle
+    mask = remove_small_components(mask, min_size=MIN_COMPONENT_SIZE)
+
+    profile.update(count=1, dtype=rasterio.uint8, compress="deflate")
+    with rasterio.open(PRED_TIF, "w", **profile) as dst:
+        dst.write(mask, 1)
+
+    # Optional polygon output
+    gdf = polygonize_mask(mask, transform, crs)
+    if len(gdf) > 0:
+        gdf = gdf.dissolve().explode(index_parts=False).reset_index(drop=True)
+        gdf.to_file(PRED_GEOJSON, driver="GeoJSON")
+
+    # save probability for inspection
+    np.save("outputs/predicted_prob.npy", prob)
+
+    print(f"Saved mask: {PRED_TIF}")
+    if len(gdf) > 0:
+        print(f"Saved polygons: {PRED_GEOJSON}")
+
+if __name__ == "__main__":
+    main()
